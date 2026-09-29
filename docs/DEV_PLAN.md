@@ -3,26 +3,26 @@
 > **Engine: Wan 2.2 (Apache-2.0) via Hugging Face Diffusers. Approved 2026-09-29.**
 > **Target hardware:** one local NVIDIA RTX 3090 (24 GB VRAM).
 > **Licence policy:** model weights must be Apache-2.0 or MIT. No audio in v1.
+> **Host:** Linux, 64 GB RAM. **Audience:** personal, single user.
 > See [ENGINE_REVIEW.md](./ENGINE_REVIEW.md) for the review and decision record.
 
 ## 1. Product scope
 
-**Goal:** a self-hosted web app where users describe a video (text prompt, optionally a start image) and get back a generated clip. They can track progress, preview it, download it and manage their history.
+**Goal:** a self-hosted, personal web app where the owner describes a video (text prompt, optionally a start image) and gets back a generated clip. They can track progress, preview it, download it and manage their history.
 
 **MVP features**
 - Text-to-video (T2V) and image-to-video (I2V) with Wan 2.2 TI2V-5B.
 - Basic parameters: preset, aspect ratio, duration/frames, seed, steps, negative prompt.
-- An async job queue with live progress (a single GPU processes one job at a time).
+- An async job queue with live progress (the GPU processes one job at a time; the owner can queue several).
 - A gallery/history with download.
 
 **Later features**
-- User accounts and quotas.
 - Style LoRAs.
 - Upscaling and frame interpolation.
 - Clip extension/stitching.
 - An experimental A14B quality tier.
 
-**Non-goals for v1:** audio, a full video editor, mobile apps, model training UI, multi-GPU or cloud scaling.
+**Non-goals for v1:** multi-user accounts, quotas, audio, a full video editor, mobile apps, model training UI, multi-GPU or cloud scaling.
 
 ## 2. Architecture
 
@@ -47,10 +47,10 @@
 | API | Python FastAPI + Pydantic, SQLAlchemy + Alembic | Same language as the ML stack, async, typed |
 | Queue | Redis + arq (a lightweight async Python queue) | Generation takes minutes, so it must be async. The worker runs with concurrency 1 |
 | Worker | Python, PyTorch (CUDA), Diffusers, FFmpeg | Runs Wan 2.2 and encodes/thumbnails output |
-| DB | PostgreSQL | Users, jobs, assets |
+| DB | PostgreSQL | Jobs, assets, settings |
 | Storage | MinIO (S3 API) on local disk | Keeps an S3-compatible path open without depending on a cloud service |
 | Realtime | Server-Sent Events | Pushes job progress (step N of M) |
-| Infra | Docker Compose + NVIDIA Container Toolkit on the 3090 host | One command starts everything. GPU passthrough is limited to the worker |
+| Infra | Docker Compose + NVIDIA Container Toolkit on the Linux 3090 host | One command starts everything. GPU passthrough is limited to the worker |
 
 **Key abstraction** (`worker/engines/base.py`):
 ```python
@@ -88,8 +88,9 @@ Implementations:
 Each phase ends with a **demoable deliverable** and exit criteria.
 
 ### Phase 0: Engine spike on the RTX 3090 (≈1 week)
-- [ ] Prepare the host: NVIDIA driver, CUDA-enabled PyTorch, and the NVIDIA Container Toolkit. Check system RAM; at least 32 GB is recommended.
-- [ ] Standalone script `spikes/wan_t2v.py`: Wan 2.2 TI2V-5B via Diffusers, running both T2V and I2V.
+- [ ] Prepare the Linux host: NVIDIA driver, CUDA-enabled PyTorch, and the NVIDIA Container Toolkit (64 GB RAM is confirmed).
+- [x] Spike kit in `spikes/wan22/`: environment check, a T2V/I2V benchmark script for Wan 2.2 TI2V-5B via Diffusers, and a results summarizer. See `spikes/wan22/README.md`.
+- [ ] Run the benchmark matrix on the 3090.
 - [ ] Benchmark on the 3090 at 480p and 720p, with and without CPU offload, VAE tiling and any speed LoRA. Record time, peak VRAM, peak RAM and quality notes.
 - [ ] Licence audit: snapshot the model card and licence of every weight file used into `docs/licenses/`. All of them must be Apache-2.0 or MIT.
 - **Exit:**
@@ -126,15 +127,13 @@ Each phase ends with a **demoable deliverable** and exit criteria.
 - [ ] Prompt helpers: example prompts and tips, following Wan's prompt conventions.
 - **Exit:** T2V and I2V both work, and users can browse and re-run past generations.
 
-### Phase 4: Accounts, quotas and safety (≈1–2 weeks)
-*Needed before exposing the app beyond the owner or LAN.*
-- [ ] Auth: a simple built-in auth (username/password, argon2 hashing, session cookies), or self-hosted Authentik if SSO is wanted.
-- [ ] Per-user job ownership, private-by-default outputs and optional share links.
-- [ ] Fair queueing: at most N queued jobs per user and daily GPU-minute quotas, because the single 3090 is the shared bottleneck.
-- [ ] Content safety: a prompt blocklist plus an Apache/MIT NSFW image classifier on sampled output frames.
-- [ ] Metadata tag noting the video is AI-generated. An optional visible watermark.
-- [ ] Remote access without opening router ports, for example Tailscale or a Cloudflare Tunnel. Put a reverse proxy (Caddy) with TLS in front.
-- **Exit:** invited users can safely use the app from outside the LAN.
+### Phase 4: Secure personal access (≈0.5 week)
+*Single user, so there are no accounts, quotas or content moderation.*
+- [ ] Bind services to localhost/LAN only. Nothing is exposed to the internet by default.
+- [ ] Remote access from your own devices through **Tailscale** (private network, no open router ports).
+- [ ] A single-owner login (password hashed with argon2, session cookie) as defence in depth, which can be disabled on the LAN.
+- [ ] Metadata tag in output files noting the video is AI-generated.
+- **Exit:** the owner can use the app from a phone or laptop away from home, with nothing publicly reachable.
 
 ### Phase 5: Advanced generation features (≈2–3 weeks, prioritize with the owner)
 - [ ] Post-processing with permissively licensed tools:
@@ -142,7 +141,7 @@ Each phase ends with a **demoable deliverable** and exit criteria.
   - upscaling with an open-source upscaler (licence checked).
 - [ ] Clip extension: take the last frame, continue it with I2V, then stitch with FFmpeg.
 - [ ] Style LoRAs: a curated, licence-checked list that users can select.
-- [ ] Experimental **A14B quality tier** (GGUF Q4–Q6 with block swapping) as an opt-in "overnight" preset.
+- [ ] **A14B quality tier** (T2V-A14B / I2V-A14B). 64 GB of RAM makes CPU offload or block swapping workable: try BF16 with offload first, then GGUF Q8/Q6 if that is too slow. Opt-in "quality" preset.
 - [ ] Optional second engine through `VideoEngine` if the licence bar allows (e.g. Kandinsky 5 Lite, MIT, as a fast draft engine).
 - **Exit:** each feature is behind a flag and benchmarked on the 3090.
 
@@ -158,6 +157,7 @@ Each phase ends with a **demoable deliverable** and exit criteria.
 - **Exit:** the app runs unattended on the 3090 box with dashboards and a runbook.
 
 ### Future (out of scope for now)
+- Multi-user support (accounts, quotas, content safety), if the app is ever shared.
 - A second GPU or cloud burst workers consuming the same queue. The architecture already supports this.
 - Audio (would need a new engine that passes the licence bar).
 
@@ -169,9 +169,9 @@ Each phase ends with a **demoable deliverable** and exit criteria.
 | 1 Foundations | 1 wk | 2 wk |
 | 2 MVP T2V | 2 wk | 4 wk |
 | 3 I2V + history | 2 wk | 6 wk |
-| 4 Accounts + safety | 1–2 wk | ~7.5 wk |
-| 5 Advanced features | 2–3 wk | ~10 wk |
-| 6 Self-hosted hardening | 1–2 wk | ~11.5 wk |
+| 4 Secure personal access | 0.5 wk | ~6.5 wk |
+| 5 Advanced features | 2–3 wk | ~9 wk |
+| 6 Self-hosted hardening | 1–2 wk | ~10.5 wk |
 
 These estimates assume one full-time developer.
 
@@ -180,15 +180,14 @@ These estimates assume one full-time developer.
 | Risk | Mitigation |
 |------|-----------|
 | Minutes per clip on a 3090 | Async queue, live progress, a Draft preset, a warm model and a speed LoRA (if its licence is OK) |
-| A single GPU is the bottleneck for all users | Concurrency of 1, per-user queue caps and quotas (Phase 4) |
 | OOM at 720p or long clips | CPU offload, VAE tiling, hard parameter limits, restart on OOM, and limits validated in Phase 0 |
 | Ampere lacks FP8 | Use BF16 or GGUF instead of FP8 checkpoints |
 | Licence creep via add-ons (LoRAs, upscalers) | Every weight file must be listed in `docs/licenses/` with Apache/MIT proof before it is merged |
 | Wan's open line is frozen at 2.2 | The `VideoEngine` abstraction; watch new Apache/MIT releases |
-| Exposing a home machine to the internet | Tailscale or a Cloudflare Tunnel, auth, and no open ports (Phase 4) |
+| Exposing a home machine to the internet | Tailscale only, owner login, and no open ports (Phase 4) |
 | Development without a GPU (CI, cloud sessions) | `FakeEngine`, so the GPU is only required for Phase 0 and for real runs |
 
-## 6. Open questions
-1. Audience: personal use only, or invited users? This decides how early Phase 4 needs to happen.
-2. Host OS on the 3090 machine: Linux, or Windows with WSL2? This affects Docker/GPU setup.
-3. How much system RAM does the host have? It matters for CPU offload and the A14B tier.
+## 6. Resolved questions (2026-09-29)
+1. **Audience:** personal, single user. Phase 4 is reduced to secure remote access.
+2. **Host OS:** Linux, with native Docker and the NVIDIA Container Toolkit.
+3. **System RAM:** 64 GB, enough for CPU offload and the A14B tier.

@@ -107,6 +107,7 @@ Legend: ✅ meets C1 · ⚠️ free but restricted (not strictly open source) ·
 |----------|----------------|-------------|
 | Primary engine | **Wan 2.2** (approved) | `WanEngine` is the only engine for v1 |
 | Licence bar | **Strict: Apache-2.0 / MIT only (for now)** | LTX-2.3, HunyuanVideo 1.5 and CogVideoX-5B are excluded. Any add-on weights (speed LoRAs, style LoRAs, upscalers) must pass the same bar |
+| Audience | **Personal, single user** | No multi-user accounts, quotas or content moderation in v1 |
 | Native audio | **Not needed for now** | No audio pipeline. The `capabilities` field leaves room for it later |
 | Hardware | **Local NVIDIA RTX 3090, 24 GB VRAM** | Single GPU, one job at a time. Ampere has no FP8 compute, so use BF16 or GGUF/INT8 weights. TI2V-5B is the default; A14B is experimental only |
 
@@ -114,7 +115,7 @@ Legend: ✅ meets C1 · ⚠️ free but restricted (not strictly open source) ·
 - **Default model:** `Wan2.2-TI2V-5B` in BF16 (≈10 GB transformer). The UMT5-XXL text encoder is offloaded to CPU with model CPU offload, and VAE tiling is enabled.
 - **FP8:** Ampere cannot compute natively in FP8. FP8 checkpoints only save memory (weights are upcast), so prefer BF16 or GGUF Q8.
 - **A14B (T2V/I2V):** only feasible with GGUF Q4–Q6 plus block swapping or offload, and it is slow (expect 10+ min per clip). Treat it as an experimental "high quality / overnight" preset.
-- **System RAM:** CPU offload needs at least 32 GB; 64 GB is recommended if A14B will be tried.
+- **System RAM:** 64 GB on a Linux host (confirmed). That is enough for CPU offload of the text encoder and for trying A14B with offload.
 - **Throughput:** one generation at a time. Everything else waits in the queue.
 
 ## Sources
