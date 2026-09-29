@@ -1,7 +1,7 @@
 # Video Generation Engine Review
 
-> **Status: AWAITING VALIDATION.** Recommendation below. Nothing is committed to until the owner approves it.
-> Review date: 2026-09-29. Licences and model versions move quickly, so re-check each one against its model card before approving.
+> **Status: APPROVED (2026-09-29): Wan 2.2 via Diffusers.** See §5 for the recorded decisions.
+> Review date: 2026-09-29. Licences and model versions move quickly, so re-check each one against its model card before upgrading.
 
 ## 1. Selection criteria
 
@@ -88,7 +88,7 @@ Legend: ✅ meets C1 · ⚠️ free but restricted (not strictly open source) ·
 | Open-Sora 2.0 | 5 | 3 | 2 | 2 | 3 | 2 | 3 | Yes |
 | Kandinsky 5 Lite | 5 | 3 | 5 | 4 | 3 | 3 | 3 | Yes |
 
-## 4. Recommendation (pending approval)
+## 4. Recommendation
 
 **Primary engine: Wan 2.2 (Apache-2.0), served through Hugging Face Diffusers inside a GPU worker.**
 - **Default tier:** `Wan2.2-TI2V-5B` for T2V and I2V at 720p, with a 4–8-step distillation LoRA for speed. It is cheap to host on one 24 GB GPU.
@@ -101,11 +101,21 @@ Legend: ✅ meets C1 · ⚠️ free but restricted (not strictly open source) ·
 - add **Kandinsky 5 Lite** as a fast "draft" engine;
 - swap engines if Wan's open line stays frozen.
 
-### Decision needed from you
-1. Approve **Wan 2.2** as the primary engine, or pick another.
-2. Confirm the licence bar: strictly OSI (Apache/MIT only), or is "free with conditions" such as LTX's under-$10M rule acceptable?
-3. Is **native audio** a must-have? If so, LTX-2.3 becomes the main contender.
-4. What GPU budget and target do you have: a local GPU (which card?), rented cloud GPUs, or serverless?
+## 5. Decision record (2026-09-29)
+
+| Question | Owner's answer | Consequence |
+|----------|----------------|-------------|
+| Primary engine | **Wan 2.2** (approved) | `WanEngine` is the only engine for v1 |
+| Licence bar | **Strict: Apache-2.0 / MIT only (for now)** | LTX-2.3, HunyuanVideo 1.5 and CogVideoX-5B are excluded. Any add-on weights (speed LoRAs, style LoRAs, upscalers) must pass the same bar |
+| Native audio | **Not needed for now** | No audio pipeline. The `capabilities` field leaves room for it later |
+| Hardware | **Local NVIDIA RTX 3090, 24 GB VRAM** | Single GPU, one job at a time. Ampere has no FP8 compute, so use BF16 or GGUF/INT8 weights. TI2V-5B is the default; A14B is experimental only |
+
+### Implications of running on an RTX 3090
+- **Default model:** `Wan2.2-TI2V-5B` in BF16 (≈10 GB transformer). The UMT5-XXL text encoder is offloaded to CPU with model CPU offload, and VAE tiling is enabled.
+- **FP8:** Ampere cannot compute natively in FP8. FP8 checkpoints only save memory (weights are upcast), so prefer BF16 or GGUF Q8.
+- **A14B (T2V/I2V):** only feasible with GGUF Q4–Q6 plus block swapping or offload, and it is slow (expect 10+ min per clip). Treat it as an experimental "high quality / overnight" preset.
+- **System RAM:** CPU offload needs at least 32 GB; 64 GB is recommended if A14B will be tried.
+- **Throughput:** one generation at a time. Everything else waits in the queue.
 
 ## Sources
 - https://www.thundercompute.com/blog/best-open-source-ai-video-generation-models
