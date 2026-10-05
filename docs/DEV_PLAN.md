@@ -36,7 +36,7 @@
       └──────────────────────────── │  Postgres   │          │ GPU worker (3090)│
                                     └─────────────┘          │ VideoEngine API  │
 ┌──────────────────────────┐                                 │  └ WanEngine     │
-│ Storage (MinIO / local FS)│ ◀───────── upload mp4/thumb ── │    (Diffusers)   │
+│ Storage (local volume)   │ ◀────────── write mp4/thumb ── │    (Diffusers)   │
 └──────────────────────────┘                                 └──────────────────┘
            all services run on the same local machine (Docker Compose)
 ```
@@ -48,11 +48,11 @@
 | Queue | Redis + arq (a lightweight async Python queue) | Generation takes minutes, so it must be async. The worker runs with concurrency 1 |
 | Worker | Python, PyTorch (CUDA), Diffusers, FFmpeg | Runs Wan 2.2 and encodes/thumbnails output |
 | DB | PostgreSQL | Jobs, assets, settings |
-| Storage | MinIO (S3 API) on local disk | Keeps an S3-compatible path open without depending on a cloud service |
+| Storage | A Docker volume shared by the API and worker (`LocalStorage`) | Simplest option for a single host. The storage interface leaves room for an S3 backend later. MinIO was dropped because its community edition no longer ships prebuilt images |
 | Realtime | Server-Sent Events | Pushes job progress (step N of M) |
 | Infra | Docker Compose + NVIDIA Container Toolkit on the Linux 3090 host | One command starts everything. GPU passthrough is limited to the worker |
 
-**Key abstraction** (`worker/engines/base.py`):
+**Key abstraction** (`backend/src/vidgen/worker/engines/base.py`):
 ```python
 class VideoEngine(Protocol):
     name: str
@@ -99,12 +99,19 @@ Each phase ends with a **demoable deliverable** and exit criteria.
   - a confirmed memory config that doesn't OOM.
 
 ### Phase 1: Project foundations (≈1 week)
-- [ ] Monorepo layout: `frontend/`, `api/`, `worker/`, `infra/`, `docs/`.
-- [ ] Docker Compose with postgres, redis, minio, api, worker (GPU) and frontend. A `compose.dev.yml` override runs the worker with `FakeEngine`, for machines without a GPU.
-- [ ] Model weights live in a host-mounted cache volume (`HF_HOME`) so they download once.
-- [ ] Tooling: ruff, mypy and pytest for Python; ESLint, Prettier and Vitest for TypeScript; pre-commit hooks.
-- [ ] CI (GitHub Actions): lint, typecheck and unit tests using `FakeEngine`. There is no GPU in CI.
-- [ ] DB schema v1: `jobs` (id, status, mode, params JSON, progress, error, timestamps) and `assets` (job_id, kind, storage_key, metadata).
+- [x] Monorepo layout:
+  - `backend/` is one Python project with `vidgen.api`, `vidgen.worker` and `vidgen.db`, so the API and worker share models and config;
+  - `frontend/`, `docs/` and `spikes/`.
+- [x] Docker Compose (`compose.yml`) with postgres, redis, a one-shot `migrate`, api, worker (CPU `FakeEngine`) and frontend. `compose.gpu.yml` swaps in the CUDA worker image on the 3090 host.
+- [x] Model weights live in a host-mounted cache (`MODELS_DIR` → `HF_HOME`) so they download once.
+- [x] Tooling: ruff, mypy (strict) and pytest for Python; ESLint, Prettier, `tsc` and Vitest for TypeScript; pre-commit hooks; a `Makefile`.
+- [x] CI (GitHub Actions):
+  - backend lint, types, a migration round-trip and tests against Postgres and Redis;
+  - frontend lint, format, types, tests and build;
+  - a full `docker compose` smoke test.
+  There is no GPU in CI.
+- [x] DB schema v1 (Alembic `0001`): `jobs` (id, status, mode, engine, prompt, params JSONB, progress, error, timestamps) and `assets` (job_id, kind, storage_key, content_type, size, metadata).
+- [x] Worker publishes a heartbeat (engine, capabilities, CUDA device). `/api/health` reports every service, and the home page shows it.
 - **Exit:** `docker compose up` brings up the whole stack on the 3090 host, and CI is green.
 
 ### Phase 2: MVP text-to-video, end to end (≈2 weeks)
@@ -113,7 +120,7 @@ Each phase ends with a **demoable deliverable** and exit criteria.
   - loads the model once at startup;
   - reports progress from the step callback;
   - encodes H.264 MP4 with FFmpeg and makes a thumbnail;
-  - uploads the result to MinIO.
+  - writes the result to storage and records `assets` rows.
 - [ ] Job lifecycle: queued → running → succeeded/failed/cancelled. Includes a per-job timeout, re-queueing if the worker crashes, and OOM handling that returns a clear error and reloads the worker.
 - [ ] Frontend: prompt form (prompt, negative prompt, preset, aspect ratio, seed), queue position, progress bar, video player, download.
 - [ ] Hard parameter limits that match what fits on 24 GB.

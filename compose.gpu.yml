@@ -1,0 +1,23 @@
+# GPU override for the RTX 3090 host (requires the NVIDIA Container Toolkit).
+services:
+  worker:
+    build:
+      target: worker-gpu
+    image: vidgen-worker-gpu
+    environment:
+      HF_HOME: /models
+    volumes:
+      # Model weights are downloaded once into this host directory.
+      - ${MODELS_DIR:-./models}:/models
+    # Model loading and CPU offload need generous shared memory.
+    shm_size: 8gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      # Loading Wan weights from disk can take minutes.
+      start_period: 600s

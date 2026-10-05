@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: vidgen
+          POSTGRES_PASSWORD: vidgen
+          POSTGRES_DB: vidgen
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vidgen" --health-interval 5s --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s
+          --health-retries 20
+    env:
+      VIDGEN_DATABASE_URL: postgresql+asyncpg://vidgen:vidgen@localhost:5432/vidgen
+      VIDGEN_REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.17"
+          enable-cache: true
+      - run: uv sync --frozen --python 3.12
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src tests
+      - name: Migrations apply and match the models
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+      - run: uv run pytest -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  stack:
+    # End-to-end smoke test: build the images and bring up the whole stack (CPU FakeEngine).
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start
+        run: docker compose up -d --build --wait --wait-timeout 300
+      - name: Health through the frontend proxy reports every service up
+        run: |
+          body=$(curl -fsS http://127.0.0.1:3000/api/health)
+          echo "$body"
+          echo "$body" | jq -e '.status == "ok" and .worker.online and .worker.engine == "fake"'
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs
+      - if: always()
+        run: docker compose down -v
