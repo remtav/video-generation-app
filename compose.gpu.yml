@@ -1,14 +1,20 @@
-# GPU override for the RTX 3090 host (requires the NVIDIA Container Toolkit).
+# GPU override for the RTX 3090 host (requires the NVIDIA Container Toolkit):
+#   docker compose -f compose.yml -f compose.gpu.yml up -d --build
 services:
   worker:
     build:
       target: worker-gpu
     image: vidgen-worker-gpu
     environment:
+      VIDGEN_ENGINE: ${VIDGEN_ENGINE:-wan}
+      VIDGEN_WAN_OFFLOAD: ${VIDGEN_WAN_OFFLOAD:-model}
       HF_HOME: /models
+      # Reduces fragmentation; needed to fit the 720p VAE decode on 24 GB cards.
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
     volumes:
-      # Model weights are downloaded once into this host directory.
-      - ${MODELS_DIR:-./models}:/models
+      # Model weights (~35 GB) are downloaded once into this volume. Set MODELS_DIR to a
+      # host path (owned by uid 1000) to keep them on a specific disk.
+      - ${MODELS_DIR:-models}:/models
     # Model loading and CPU offload need generous shared memory.
     shm_size: 8gb
     deploy:
@@ -19,5 +25,9 @@ services:
               count: 1
               capabilities: [gpu]
     healthcheck:
-      # Loading Wan weights from disk can take minutes.
-      start_period: 600s
+      # The worker reports healthy while still loading (state "loading" in /api/health);
+      # this only allows for slow container start-up.
+      start_period: 120s
+
+volumes:
+  models:

@@ -23,7 +23,17 @@ dependencies = [
 # Installed only in the CUDA worker image (RTX 3090 host).
 gpu = [
     "accelerate>=1.6",
-    "diffusers>=0.35",
+    "diffusers>=0.40",
+    "ftfy>=6.2",
+    "sentencepiece>=0.2",
+    "torch>=2.8",
+    "transformers>=4.51",
+]
+# Same stack with CPU-only torch: runs the Wan engine tests with tiny random models
+# (CI, machines without a GPU). Mutually exclusive with "gpu".
+cpu = [
+    "accelerate>=1.6",
+    "diffusers>=0.40",
     "ftfy>=6.2",
     "sentencepiece>=0.2",
     "torch>=2.8",
@@ -48,13 +58,22 @@ packages = ["src/vidgen"]
 
 [tool.uv]
 environments = ["sys_platform == 'linux'"]
+conflicts = [[{ extra = "gpu" }, { extra = "cpu" }]]
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu128" }
+torch = [
+    { index = "pytorch-cu128", extra = "gpu" },
+    { index = "pytorch-cpu", extra = "cpu" },
+]
 
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [tool.ruff]
@@ -71,8 +90,13 @@ plugins = ["pydantic.mypy"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["arq.*", "imageio.*", "imageio_ffmpeg.*", "torch.*"]
+module = ["arq.*", "imageio.*", "imageio_ffmpeg.*", "torch.*", "diffusers.*", "transformers.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# diffusers and transformers are untyped.
+module = ["vidgen.worker.engines.wan", "tests.test_wan_engine"]
+disallow_untyped_calls = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -5,7 +5,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from tests.conftest import DATABASE_URL, REDIS_URL, requires_services
+from tests.conftest import REDIS_URL, requires_services
 from vidgen.api.main import create_app
 from vidgen.config import get_settings
 
@@ -60,11 +60,14 @@ async def test_health_ok_and_reports_worker(client: httpx.AsyncClient) -> None:
 
     from vidgen.keys import WORKER_HEARTBEAT_KEY
     from vidgen.worker.engines.fake import FakeEngine
-    from vidgen.worker.main import heartbeat_payload
+    from vidgen.worker_status import heartbeat_payload
 
-    assert DATABASE_URL and REDIS_URL
+    assert REDIS_URL
     redis = Redis.from_url(REDIS_URL)
-    await redis.set(WORKER_HEARTBEAT_KEY, heartbeat_payload(FakeEngine(), "cpu"), ex=30)
+    payload = heartbeat_payload(
+        engine="fake", capabilities=FakeEngine.capabilities, device="cpu", state="ready"
+    )
+    await redis.set(WORKER_HEARTBEAT_KEY, payload, ex=30)
     try:
         resp = await client.get("/api/health")
     finally:
@@ -76,6 +79,7 @@ async def test_health_ok_and_reports_worker(client: httpx.AsyncClient) -> None:
     assert body["status"] == "ok"
     assert body["worker"] == {
         "online": True,
+        "state": "ready",
         "engine": "fake",
         "capabilities": ["i2v", "t2v"],
         "device": "cpu",

@@ -10,7 +10,7 @@ ENV UV_COMPILE_BYTECODE=1 \
     PATH="/app/.venv/bin:$PATH"
 WORKDIR /app
 RUN useradd --uid 1000 --create-home app \
-    && mkdir -p /data && chown app:app /data
+    && mkdir -p /data /models && chown app:app /data /models
 
 FROM base AS cpu-deps
 COPY pyproject.toml uv.lock ./

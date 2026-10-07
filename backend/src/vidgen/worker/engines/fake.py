@@ -24,9 +24,12 @@ class FakeEngine:
             on_progress(step, req.steps)
 
         rng = np.random.default_rng(req.seed)
-        base = rng.uniform(0, 1, size=3)
-        t = np.linspace(0, 1, req.num_frames, dtype=np.float32)[:, None, None, None]
-        x = np.linspace(0, 1, req.width, dtype=np.float32)[None, None, :, None]
-        y = np.linspace(0, 1, req.height, dtype=np.float32)[None, :, None, None]
-        frames = 0.5 + 0.5 * np.sin(2 * np.pi * (x + y + t + base))
-        return GeneratedVideo(frames=(frames * 255).astype(np.uint8), fps=req.fps)
+        phase = rng.uniform(0, 1, size=3).astype(np.float32)
+        x = np.linspace(0, 1, req.width, dtype=np.float32)[None, :, None]
+        y = np.linspace(0, 1, req.height, dtype=np.float32)[:, None, None]
+        # Render frame by frame into uint8: a 720p clip stays ~330 MB instead of ~1.3 GB.
+        frames = np.empty((req.num_frames, req.height, req.width, 3), dtype=np.uint8)
+        for i, t in enumerate(np.linspace(0, 1, req.num_frames, dtype=np.float32)):
+            frame = 0.5 + 0.5 * np.sin(2 * np.pi * (x + y + t + phase))
+            frames[i] = (frame * 255).astype(np.uint8)
+        return GeneratedVideo(frames=frames, fps=req.fps)

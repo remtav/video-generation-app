@@ -65,23 +65,29 @@ Implementations:
 - `WanEngine`: the real engine.
 - `FakeEngine`: CPU-only. It returns a synthetic clip so development and CI work without a GPU.
 
-### RTX 3090 memory strategy (to be confirmed in Phase 0)
-- TI2V-5B transformer in **BF16** (≈10 GB).
-- UMT5-XXL text encoder offloaded to CPU with `enable_model_cpu_offload()` (it only runs once per job).
-- **VAE tiling/slicing** so 720p decoding fits in memory.
+### RTX 3090 memory strategy (implemented in Phase 2, to be confirmed in Phase 0)
+- TI2V-5B transformer in **BF16** (≈10 GB); VAE in FP32, as in the official code.
+- `enable_model_cpu_offload()`: the UMT5-XXL text encoder (11.4 GB) and the VAE move to the GPU only when needed.
+- **VAE tiling is mandatory at 720p.** An untiled FP32 decode needs about 26 GB.
+- `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` reduces fragmentation.
 - No FP8 compute on Ampere. Use GGUF/INT8 only if VRAM gets tight.
-- Keep the model resident between jobs (warm worker). Call `torch.cuda.empty_cache()` after each job, and restart the worker on OOM.
-- Optional speedups:
-  - SDPA or SageAttention;
+- **Warm worker:** the model stays resident between jobs. The worker frees the CUDA cache after each job and restarts itself after an out-of-memory error.
+- **Optional speed-ups (later):**
+  - SageAttention;
   - `torch.compile`;
-  - a 4–8-step distillation LoRA, only if its licence is Apache/MIT.
+  - a BF16 VAE or larger decode tiles;
+  - FastWan2.2-TI2V-5B (Apache-2.0, 3 steps).
 
-### Planned presets (numbers are estimates until Phase 0 benchmarks)
-| Preset | Resolution | Frames (≈ duration) | Steps | Expected time on 3090 |
-|--------|-----------|---------------------|-------|------------------------|
-| Draft | ~832×480 | 81 (~3.4 s @24fps) | 4–8 with distill LoRA, else ~20 | ~1 min |
-| Standard | 1280×704 (Wan 5B native 720p) | 121 (~5 s @24fps) | ~30 | several minutes |
-| Quality (experimental, Phase 5) | 720p, A14B GGUF | 81 | ~40 | 10+ min |
+  No Apache/MIT step-distillation LoRA exists for TI2V-5B (see `docs/BENCHMARKS.md`).
+
+### Presets (estimates until Phase 0 benchmarks; see `docs/BENCHMARKS.md`)
+TI2V-5B is trained only at 1280×704 and 704×1280, so presets vary clip length and steps, not resolution.
+
+| Preset | Size | Frames (duration) | Steps | Estimated time on a 3090 |
+|--------|------|-------------------|-------|--------------------------|
+| Draft | 1280×704 / 704×1280 | 49 (2.0 s @24fps) | 20 | ~3.4 min |
+| Standard | 1280×704 / 704×1280 | 121 (5.0 s @24fps) | 30 | ~14 min |
+| Quality (experimental, Phase 5) | 720p, A14B GGUF | 81 | ~40 | 20+ min |
 
 ## 3. Implementation phases
 
@@ -90,8 +96,8 @@ Each phase ends with a **demoable deliverable** and exit criteria.
 ### Phase 0: Engine spike on the RTX 3090 (≈1 week)
 - [ ] Prepare the Linux host: NVIDIA driver, CUDA-enabled PyTorch, and the NVIDIA Container Toolkit (64 GB RAM is confirmed).
 - [x] Spike kit in `spikes/wan22/`: environment check, a T2V/I2V benchmark script for Wan 2.2 TI2V-5B via Diffusers, and a results summarizer. See `spikes/wan22/README.md`.
-- [ ] Run the benchmark matrix on the 3090.
-- [ ] Benchmark on the 3090 at 480p and 720p, with and without CPU offload, VAE tiling and any speed LoRA. Record time, peak VRAM, peak RAM and quality notes.
+- [ ] Run the benchmark matrix on the 3090: the app's Draft and Standard presets plus the 480p alternative, with and without CPU offload and VAE tiling. Record time, VAE decode time, peak VRAM, peak RAM and quality notes.
+- [x] Interim estimates from published numbers: `docs/BENCHMARKS.md`.
 - [ ] Licence audit: snapshot the model card and licence of every weight file used into `docs/licenses/`. All of them must be Apache-2.0 or MIT.
 - **Exit:**
   - `docs/BENCHMARKS.md` with measured numbers;
@@ -115,22 +121,43 @@ Each phase ends with a **demoable deliverable** and exit criteria.
 - **Exit:** `docker compose up` brings up the whole stack on the 3090 host, and CI is green.
 
 ### Phase 2: MVP text-to-video, end to end (≈2 weeks)
-- [ ] API endpoints: `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/events` (SSE), `GET /jobs`, `DELETE /jobs/{id}` (which cancels a queued job).
-- [ ] `WanEngine` adapter:
-  - loads the model once at startup;
-  - reports progress from the step callback;
-  - encodes H.264 MP4 with FFmpeg and makes a thumbnail;
-  - writes the result to storage and records `assets` rows.
-- [ ] Job lifecycle: queued → running → succeeded/failed/cancelled. Includes a per-job timeout, re-queueing if the worker crashes, and OOM handling that returns a clear error and reloads the worker.
-- [ ] Frontend: prompt form (prompt, negative prompt, preset, aspect ratio, seed), queue position, progress bar, video player, download.
-- [ ] Hard parameter limits that match what fits on 24 GB.
+- [x] API endpoints:
+  - `POST /api/jobs`, `GET /api/jobs` (cursor pagination) and `GET /api/jobs/{id}`;
+  - `GET /api/jobs/{id}/events` (SSE);
+  - `POST /api/jobs/{id}/cancel`, which cancels a queued job at once or stops a running one at its next step;
+  - `DELETE /api/jobs/{id}` for finished jobs;
+  - `GET /api/jobs/{id}/video` (Range requests; `?download=true`), `GET /api/jobs/{id}/thumbnail` and `GET /api/presets`.
+- [x] `WanEngine` adapter (`backend/src/vidgen/worker/engines/wan.py`):
+  - loads the model once and keeps it warm;
+  - reports progress from the step callback, which also enforces cancellation and the deadline;
+  - maps out-of-memory errors to a clear message.
+  - The worker encodes H.264 MP4 and a thumbnail, writes them to storage and records `assets` rows.
+  - It is tested against real diffusers code with a tiny random pipeline on the CPU.
+- [x] Job lifecycle: queued → running → succeeded/failed/cancelled.
+  - **Claiming** uses conditional database updates, so cancel and claim never race.
+  - **Deadline:** 45 min by default, enforced at step boundaries. arq's own timeout is only a backstop.
+  - **Crash recovery:** arq retries the job once. Startup clears stale arq markers so the retry starts immediately, and periodic reconciliation fails orphaned jobs with a precise reason.
+  - **Out of memory:** the job fails with a clear message and the worker restarts itself.
+  - **Shutdown and timeouts** wait for the engine thread, so two generations never share the GPU.
+- [x] Frontend:
+  - prompt form (prompt, preset with time estimate, aspect ratio, and advanced seed, steps, guidance and negative prompt);
+  - live job card over SSE with queue position, progress, elapsed time and cancel;
+  - video player and download;
+  - recent jobs list and worker status badge.
+- [x] Hard parameter limits:
+  - only TI2V-5B's native sizes;
+  - frame counts fixed per preset;
+  - steps from 1 to 60;
+  - guidance from 1 to 10;
+  - prompts up to 2000 characters.
+- [x] End-to-end smoke test (`scripts/smoke_test.sh`) through the frontend proxy, run in CI against the CPU stack.
 - **Exit:** from a browser on the LAN, a user types a prompt and watches progress, then plays and downloads a 720p clip generated on the 3090.
 
 ### Phase 3: Image-to-video, history and UX (≈2 weeks)
 - [ ] Image upload (type and size validation, resize/crop to the target aspect) and an I2V mode on the same TI2V-5B model.
 - [ ] Gallery/history page with pagination, re-run with the same seed and params, "remix" (edit params) and delete.
-- [ ] Draft and Standard presets wired to the benchmarked values.
-- [ ] Time estimate based on each preset's measured average duration.
+- [ ] Draft and Standard presets updated with the Phase 0 measurements.
+- [ ] Time estimates from measured durations. Phase 2 already scales the estimate with the step count.
 - [ ] Prompt helpers: example prompts and tips, following Wan's prompt conventions.
 - **Exit:** T2V and I2V both work, and users can browse and re-run past generations.
 

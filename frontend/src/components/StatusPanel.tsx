@@ -12,9 +12,11 @@ export function statusRows(report: HealthReport): Row[] {
     {
       label: "Worker",
       ok: worker.online,
-      detail: worker.online
-        ? `${worker.engine} engine on ${worker.device} (${worker.capabilities.join(", ")})`
-        : "offline",
+      detail: !worker.online
+        ? "offline"
+        : worker.state === "loading"
+          ? `loading ${worker.engine} model on ${worker.device}`
+          : `${worker.engine} engine on ${worker.device} (${worker.capabilities.join(", ")})`,
     },
   ];
 }

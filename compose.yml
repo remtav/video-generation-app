@@ -81,6 +81,9 @@ services:
       target: worker
     image: vidgen-worker
     environment: *backend-env
+    # On shutdown a running generation stops at its next step, but a VAE decode in
+    # progress cannot be interrupted (~2.5 min at 720p on an RTX 3090).
+    stop_grace_period: 300s
     volumes:
       - media:/data
     depends_on:

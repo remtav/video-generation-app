@@ -62,5 +62,17 @@ def test_i2v_request_with_image() -> None:
 
 def test_registry() -> None:
     assert create_engine(Settings(engine="fake")).name == "fake"
-    with pytest.raises(NotImplementedError):
-        create_engine(Settings(engine="wan"))
+    wan = create_engine(Settings(engine="wan", wan_offload="sequential", wan_vae_tiling=False))
+    assert wan.name == "wan"
+    assert wan.capabilities == frozenset({"t2v"})
+
+
+def test_presets_respect_wan_constraints() -> None:
+    from vidgen.presets import PRESETS
+
+    for preset in PRESETS.values():
+        for ratio in ("16:9", "9:16"):
+            width, height = preset.size(ratio)
+            # Valid GenerationRequest sizes and frame counts for Wan 2.2 TI2V-5B.
+            make_request(width=width, height=height, num_frames=preset.num_frames)
+        assert preset.est_seconds(preset.steps * 2) > preset.est_seconds()

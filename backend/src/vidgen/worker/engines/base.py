@@ -10,8 +10,21 @@ from PIL import Image
 
 from vidgen.db.models import JobMode
 
-# Called after each denoising step with (completed_steps, total_steps).
+# Called after each denoising step with (completed_steps, total_steps). It may raise
+# GenerationCancelled or GenerationTimeout to stop the engine at a step boundary.
 ProgressCallback = Callable[[int, int], None]
+
+
+class GenerationCancelled(Exception):
+    """The user cancelled the job."""
+
+
+class GenerationTimeout(Exception):
+    """The job ran past its deadline."""
+
+
+class EngineOutOfMemory(Exception):
+    """The GPU ran out of memory. The engine has released what it could."""
 
 
 @dataclass(frozen=True)

@@ -18,10 +18,13 @@ MODEL_ID = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 FPS = 24
 
 # Width/height must be multiples of 32; frames must be 4k+1.
+# draft/standard match the app's presets (backend/src/vidgen/presets.py). draft480 tests
+# the alternative of a lower resolution, which TI2V-5B was not trained on.
 PRESETS = {
-    "draft": {"width": 832, "height": 480, "frames": 81, "steps": 20},
+    "draft": {"width": 1280, "height": 704, "frames": 49, "steps": 20},
     "standard": {"width": 1280, "height": 704, "frames": 121, "steps": 30},
     "reference": {"width": 1280, "height": 704, "frames": 121, "steps": 50},
+    "draft480": {"width": 832, "height": 480, "frames": 81, "steps": 20},
 }
 
 DEFAULT_PROMPT = (
@@ -67,9 +70,9 @@ def parse_args() -> argparse.Namespace:
 
 def build_pipeline(mode: str, offload: str, vae_tiling: bool):
     # The Wan VAE is kept in fp32 for quality, as in the official example.
-    vae = AutoencoderKLWan.from_pretrained(MODEL_ID, subfolder="vae", torch_dtype=torch.float32)
+    vae = AutoencoderKLWan.from_pretrained(MODEL_ID, subfolder="vae", dtype=torch.float32)
     cls = WanImageToVideoPipeline if mode == "i2v" else WanPipeline
-    pipe = cls.from_pretrained(MODEL_ID, vae=vae, torch_dtype=torch.bfloat16)
+    pipe = cls.from_pretrained(MODEL_ID, vae=vae, dtype=torch.bfloat16)
     if offload == "model":
         pipe.enable_model_cpu_offload()
     elif offload == "sequential":
@@ -78,6 +81,7 @@ def build_pipeline(mode: str, offload: str, vae_tiling: bool):
         pipe.to("cuda")
     if vae_tiling and hasattr(pipe.vae, "enable_tiling"):
         pipe.vae.enable_tiling()
+    pipe.set_progress_bar_config(disable=True)
     return pipe
 
 
@@ -161,6 +165,9 @@ def main() -> None:
             "error": error,
             "load_s": round(load_s, 1) if run == 0 else None,
             "generate_s": round(gen_s, 1),
+            # The first step includes warm-up; the median excludes it. Decode time is the
+            # gap between the last step and the end of the call (VAE decode + postprocess).
+            "decode_s": round(gen_s - sum(step_times), 1) if step_times else None,
             # The first step includes warm-up; the median excludes it.
             "median_step_s": round(sorted(step_times[1:])[len(step_times[1:]) // 2], 2)
             if len(step_times) > 1

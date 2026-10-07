@@ -6,7 +6,7 @@ from pathlib import Path
 
 COLS = [
     "mode", "preset", "width", "height", "frames", "steps", "offload", "vae_tiling",
-    "status", "generate_s", "median_step_s", "peak_vram_gb", "peak_ram_gb",
+    "status", "generate_s", "median_step_s", "decode_s", "peak_vram_gb", "peak_ram_gb",
 ]
 
 

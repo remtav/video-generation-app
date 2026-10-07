@@ -1,6 +1,6 @@
 COMPOSE_GPU := docker compose -f compose.yml -f compose.gpu.yml
 
-.PHONY: up up-gpu down logs ps health test lint fmt
+.PHONY: up up-gpu down logs ps health smoke test lint fmt
 
 up:        ## Full stack with the CPU FakeEngine (any machine)
 	docker compose up -d --build --wait
@@ -19,6 +19,9 @@ ps:
 
 health:
 	curl -fsS http://127.0.0.1:8000/api/health; echo
+
+smoke:     ## End-to-end check of the running stack through the frontend
+	scripts/smoke_test.sh http://127.0.0.1:3000
 
 test:      ## Unit tests (backend DB tests need VIDGEN_DATABASE_URL / VIDGEN_REDIS_URL)
 	cd backend && uv run pytest

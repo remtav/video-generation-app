@@ -1,24 +1,15 @@
 """Liveness and readiness of the stack: database, Redis, storage and the GPU worker."""
 
-import json
-from typing import Any, Literal
+from typing import Literal
 
 from fastapi import APIRouter, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy import text
 
 from vidgen import __version__
-from vidgen.keys import WORKER_HEARTBEAT_KEY
+from vidgen.worker_status import WorkerStatus, read_worker_status
 
 router = APIRouter(tags=["health"])
-
-
-class WorkerStatus(BaseModel):
-    online: bool
-    engine: str | None = None
-    capabilities: list[str] = []
-    device: str | None = None
-    last_seen: float | None = None
 
 
 class HealthReport(BaseModel):
@@ -46,21 +37,11 @@ async def readiness(request: Request, response: Response) -> HealthReport:
     except Exception:
         database = False
 
-    worker = WorkerStatus(online=False)
     try:
-        raw = await state.redis.get(WORKER_HEARTBEAT_KEY)
+        worker = await read_worker_status(state.redis)
         redis_ok = True
     except Exception:
-        raw, redis_ok = None, False
-    if raw:
-        beat: dict[str, Any] = json.loads(raw)
-        worker = WorkerStatus(
-            online=True,
-            engine=beat.get("engine"),
-            capabilities=beat.get("capabilities", []),
-            device=beat.get("device"),
-            last_seen=beat.get("ts"),
-        )
+        worker, redis_ok = WorkerStatus(online=False), False
 
     storage = state.storage.is_writable()
     # The worker being offline does not make the API unhealthy; it is reported separately.

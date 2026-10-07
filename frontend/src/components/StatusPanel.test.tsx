@@ -13,6 +13,7 @@ const healthy: HealthReport = {
   storage: true,
   worker: {
     online: true,
+    state: "ready",
     engine: "fake",
     capabilities: ["i2v", "t2v"],
     device: "cpu",

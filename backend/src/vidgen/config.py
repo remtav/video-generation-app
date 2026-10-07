@@ -19,6 +19,16 @@ class Settings(BaseSettings):
     # Seconds the FakeEngine sleeps per step, to make progress visible in dev.
     fake_step_delay: float = 0.05
 
+    # Wan 2.2 engine (GPU worker only).
+    wan_model_id: str = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+    # none: everything on the GPU; model: components moved to the GPU on demand (default,
+    # fits 24 GB at 720p); sequential: lowest VRAM, much slower.
+    wan_offload: Literal["none", "model", "sequential"] = "model"
+    wan_vae_tiling: bool = True
+
+    # A generation still denoising after this long is stopped and marked failed.
+    generation_timeout_s: float = 45 * 60
+
     heartbeat_interval_s: float = 10.0
 
 

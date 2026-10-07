@@ -7,6 +7,12 @@ def create_engine(settings: Settings) -> VideoEngine:
     if settings.engine == "fake":
         return FakeEngine(step_delay=settings.fake_step_delay)
     if settings.engine == "wan":
-        # The Wan 2.2 adapter is implemented in Phase 2 (see docs/DEV_PLAN.md).
-        raise NotImplementedError("the 'wan' engine is not implemented yet; use 'fake'")
+        # Imported lazily: only the GPU worker image has torch and diffusers.
+        from vidgen.worker.engines.wan import WanEngine
+
+        return WanEngine(
+            settings.wan_model_id,
+            offload=settings.wan_offload,
+            vae_tiling=settings.wan_vae_tiling,
+        )
     raise ValueError(f"unknown engine: {settings.engine}")
